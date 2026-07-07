@@ -25,9 +25,10 @@ class CpuPanel(Vertical):
         yield Sparkline([], id="cpu-sparkline")
 
     def on_mount(self) -> None:
-        self.history = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
+        current = metrics.get_cpu()["total"]
+        self.history = deque([current] * HISTORY_LEN, maxlen=HISTORY_LEN)
         self.update_data()
-        self.set_interval(2, self.update_data)
+        self.set_interval(1.5, self.update_data)
 
     def update_data(self) -> None:
         cpu = metrics.get_cpu()
@@ -59,9 +60,10 @@ class MemPanel(Vertical):
         yield Sparkline([], id="mem-sparkline")
 
     def on_mount(self) -> None:
-        self.history = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
+        current = metrics.get_memory()["percent"]
+        self.history = deque([current] * HISTORY_LEN, maxlen=HISTORY_LEN)
         self.update_data()
-        self.set_interval(2, self.update_data)
+        self.set_interval(1.5, self.update_data)
 
     def update_data(self) -> None:
         mem = metrics.get_memory()
@@ -84,7 +86,7 @@ class DiskPanel(Static):
     def on_mount(self) -> None:
         self._prev_io = None
         self.update_data()
-        self.set_interval(2, self.update_data)
+        self.set_interval(1.5, self.update_data)
 
     def update_data(self) -> None:
         disks = metrics.get_disks()
@@ -117,7 +119,7 @@ class NetworkPanel(Vertical):
         self._prev = {}
         self.history = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
         self.update_data()
-        self.set_interval(2, self.update_data)
+        self.set_interval(1.5, self.update_data)
 
     def update_data(self) -> None:
         net = metrics.get_network()
@@ -156,7 +158,7 @@ class ProcessesPanel(Static):
         table.cursor_type = "row"
         self._procs = {}
         self.update_data()
-        self.set_interval(2, self.update_data)
+        self.set_interval(1.5, self.update_data)
 
     def update_data(self) -> None:
         rows = metrics.get_processes(self._procs)
@@ -179,7 +181,7 @@ class ServicesPanel(Static):
         table.add_columns("Servicio", "Estado", "Detalle")
         table.cursor_type = "row"
         self.update_data()
-        self.set_interval(3, self.update_data)
+        self.set_interval(2, self.update_data)
 
     def update_data(self) -> None:
         table = self.query_one(DataTable)
@@ -202,7 +204,7 @@ class DockerPanel(Static):
         table.add_columns("Contenedor", "CPU %", "Memoria", "Mem %")
         table.cursor_type = "row"
         self.update_data()
-        self.set_interval(3, self.update_data)
+        self.set_interval(2, self.update_data)
 
     def update_data(self) -> None:
         table = self.query_one(DataTable)
@@ -247,11 +249,24 @@ class ServerMonitorApp(App):
         height: 3;
         margin-top: 1;
     }
+    Sparkline > .sparkline--max-color {
+        color: $error;
+    }
+    Sparkline > .sparkline--min-color {
+        color: $success;
+    }
     #bottom-row TabbedContent {
-        height: 100%;
+        height: 1fr;
+    }
+    TabPane {
+        height: 1fr;
+        padding: 0;
     }
     ServicesPanel, DockerPanel, ProcessesPanel {
-        height: 100%;
+        height: 1fr;
+    }
+    DataTable {
+        height: 1fr;
     }
     """
 
