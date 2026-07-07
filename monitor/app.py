@@ -1,25 +1,40 @@
 """Monitor de recursos del servidor - interfaz tipo btop hecha con Textual."""
+from collections import deque
+
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Footer, Static, DataTable
-from textual.reactive import reactive
+from textual.widgets import Header, Footer, Static, DataTable, Sparkline, TabbedContent, TabPane
 
 from . import metrics
 
+HISTORY_LEN = 40
 
-class CpuPanel(Static):
-    """Panel de CPU: uso total, por núcleo y temperatura."""
+
+def bar(pct: float, width: int = 30) -> str:
+    """Barra de progreso coloreada según el porcentaje."""
+    filled = int(width * pct / 100)
+    color = "red" if pct >= 85 else ("yellow" if pct >= 60 else "green")
+    return f"[{color}]{'█' * filled}{'░' * (width - filled)}[/{color}]"
+
+
+class CpuPanel(Vertical):
+    """Panel de CPU: uso total, por núcleo, temperatura y gráfica de historial."""
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="cpu-info")
+        yield Sparkline([], id="cpu-sparkline")
 
     def on_mount(self) -> None:
+        self.history = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
         self.update_data()
         self.set_interval(2, self.update_data)
 
     def update_data(self) -> None:
         cpu = metrics.get_cpu()
         temp = metrics.get_temperature()
+        self.history.append(cpu["total"])
 
-        bar = self._bar(cpu["total"])
-        lines = [f"[b]CPU[/b]  {bar}  {cpu['total']:.1f}%"]
+        lines = [f"[b]CPU[/b]  {bar(cpu['total'])}  {cpu['total']:.1f}%"]
         if cpu["freq_mhz"]:
             lines.append(f"Frecuencia: {cpu['freq_mhz']} MHz")
         if temp is not None:
@@ -30,35 +45,37 @@ class CpuPanel(Static):
 
         lines.append("")
         for i, pct in enumerate(cpu["per_core"]):
-            lines.append(f"C{i}: {self._bar(pct, width=20)} {pct:4.1f}%")
+            lines.append(f"C{i}: {bar(pct, width=20)} {pct:4.1f}%")
 
-        self.update("\n".join(lines))
-
-    @staticmethod
-    def _bar(pct: float, width: int = 30) -> str:
-        filled = int(width * pct / 100)
-        color = "red" if pct >= 85 else ("yellow" if pct >= 60 else "green")
-        return f"[{color}]{'█' * filled}{'░' * (width - filled)}[/{color}]"
+        self.query_one("#cpu-info", Static).update("\n".join(lines))
+        self.query_one("#cpu-sparkline", Sparkline).data = list(self.history)
 
 
-class MemPanel(Static):
-    """Panel de memoria RAM."""
+class MemPanel(Vertical):
+    """Panel de memoria RAM con gráfica de historial."""
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="mem-info")
+        yield Sparkline([], id="mem-sparkline")
 
     def on_mount(self) -> None:
+        self.history = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
         self.update_data()
         self.set_interval(2, self.update_data)
 
     def update_data(self) -> None:
         mem = metrics.get_memory()
-        bar = CpuPanel._bar(mem["percent"])
+        self.history.append(mem["percent"])
+
         lines = [
-            f"[b]RAM[/b]  {bar}  {mem['percent']}%",
+            f"[b]RAM[/b]  {bar(mem['percent'])}  {mem['percent']}%",
             "",
             f"Total:     {mem['total_gb']} GiB",
             f"Usada:     {mem['used_gb']} GiB",
             f"Disponible:{mem['available_gb']} GiB",
         ]
-        self.update("\n".join(lines))
+        self.query_one("#mem-info", Static).update("\n".join(lines))
+        self.query_one("#mem-sparkline", Sparkline).data = list(self.history)
 
 
 class DiskPanel(Static):
@@ -74,9 +91,9 @@ class DiskPanel(Static):
         lines = ["[b]DISCOS[/b]", ""]
 
         for part in disks["partitions"]:
-            bar = CpuPanel._bar(part["percent"], width=20)
+            b = bar(part["percent"], width=20)
             lines.append(f"{part['mountpoint']} ({part['device']})")
-            lines.append(f"  {bar} {part['percent']}%   {part['used_gb']}/{part['total_gb']} GiB")
+            lines.append(f"  {b} {part['percent']}%   {part['used_gb']}/{part['total_gb']} GiB")
 
         io = disks["io"]
         if self._prev_io is not None:
@@ -89,17 +106,23 @@ class DiskPanel(Static):
         self.update("\n".join(lines))
 
 
-class NetworkPanel(Static):
-    """Panel de red / wifi."""
+class NetworkPanel(Vertical):
+    """Panel de red / wifi con gráfica de historial de descarga."""
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="net-info")
+        yield Sparkline([], id="net-sparkline")
 
     def on_mount(self) -> None:
         self._prev = {}
+        self.history = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
         self.update_data()
         self.set_interval(2, self.update_data)
 
     def update_data(self) -> None:
         net = metrics.get_network()
         lines = ["[b]RED[/b]", ""]
+        total_down = 0.0
 
         for iface in net["interfaces"]:
             name = iface["name"]
@@ -108,6 +131,7 @@ class NetworkPanel(Static):
             down_speed = max(0, recv - prev[0]) / 2 / 1024  # KiB/s (intervalo=2s)
             up_speed = max(0, sent - prev[1]) / 2 / 1024
             self._prev[name] = (recv, sent)
+            total_down += down_speed
             lines.append(f"{name}:")
             lines.append(f"  ↓ {down_speed:7.1f} KiB/s   ↑ {up_speed:7.1f} KiB/s")
 
@@ -115,18 +139,44 @@ class NetworkPanel(Static):
             lines.append("")
             lines.append(f"WiFi ({net['wifi']['interface']}): calidad {net['wifi']['quality']}")
 
-        self.update("\n".join(lines))
+        self.history.append(total_down)
+        self.query_one("#net-info", Static).update("\n".join(lines))
+        self.query_one("#net-sparkline", Sparkline).data = list(self.history)
+
+
+class ProcessesPanel(Static):
+    """Panel de procesos tipo btop: PID, programa, usuario, memoria y CPU% en vivo."""
+
+    def compose(self) -> ComposeResult:
+        yield DataTable(id="proc-table")
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        table.add_columns("PID", "Programa", "Usuario", "Mem", "CPU %")
+        table.cursor_type = "row"
+        self._procs = {}
+        self.update_data()
+        self.set_interval(2, self.update_data)
+
+    def update_data(self) -> None:
+        rows = metrics.get_processes(self._procs)
+        table = self.query_one(DataTable)
+        table.clear()
+
+        for pid, name, user, mem_mb, cpu in rows[:25]:
+            color = "red" if cpu >= 50 else ("yellow" if cpu >= 20 else "green")
+            table.add_row(str(pid), name, user, f"{mem_mb:.1f} MiB", f"[{color}]{cpu:5.1f}%[/{color}]")
 
 
 class ServicesPanel(Static):
-    """Panel de servicios systemd + contenedores Docker, en tabla navegable."""
+    """Panel de servicios systemd, en tabla navegable."""
 
     def compose(self) -> ComposeResult:
         yield DataTable(id="services-table")
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("Tipo", "Nombre", "Estado")
+        table.add_columns("Servicio", "Estado", "Detalle")
         table.cursor_type = "row"
         self.update_data()
         self.set_interval(3, self.update_data)
@@ -138,11 +188,40 @@ class ServicesPanel(Static):
 
         for svc in data["systemd"]:
             color = "green" if svc["active"] == "active" else "red"
-            table.add_row("systemd", svc["name"], f"[{color}]{svc['active']}[/{color}]")
+            table.add_row(svc["name"], f"[{color}]{svc['active']}[/{color}]", svc["sub"])
 
-        for c in data["docker"]:
-            color = "green" if c["status"].startswith("Up") else "red"
-            table.add_row("docker", c["name"], f"[{color}]{c['status']}[/{color}]")
+
+class DockerPanel(Static):
+    """Panel tipo lazydocker: stats en vivo (CPU%, memoria) por contenedor."""
+
+    def compose(self) -> ComposeResult:
+        yield DataTable(id="docker-table")
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        table.add_columns("Contenedor", "CPU %", "Memoria", "Mem %")
+        table.cursor_type = "row"
+        self.update_data()
+        self.set_interval(3, self.update_data)
+
+    def update_data(self) -> None:
+        table = self.query_one(DataTable)
+        table.clear()
+        stats = metrics.get_docker_stats()
+
+        if not stats:
+            table.add_row("[dim]Sin contenedores corriendo o Docker no disponible[/dim]", "", "", "")
+            return
+
+        for c in stats:
+            cpu_val = float(c["cpu_percent"].replace("%", "") or 0)
+            color = "red" if cpu_val >= 80 else ("yellow" if cpu_val >= 50 else "green")
+            table.add_row(
+                c["name"],
+                f"[{color}]{c['cpu_percent']}[/{color}]",
+                c["mem_usage"],
+                c["mem_percent"],
+            )
 
 
 class ServerMonitorApp(App):
@@ -153,10 +232,10 @@ class ServerMonitorApp(App):
         layout: vertical;
     }
     #top-row {
-        height: 40%;
+        height: 45%;
     }
     #bottom-row {
-        height: 60%;
+        height: 55%;
     }
     CpuPanel, MemPanel, DiskPanel, NetworkPanel {
         border: round $primary;
@@ -164,9 +243,14 @@ class ServerMonitorApp(App):
         width: 1fr;
         height: 100%;
     }
-    ServicesPanel {
-        border: round $primary;
-        padding: 1 2;
+    Sparkline {
+        height: 3;
+        margin-top: 1;
+    }
+    #bottom-row TabbedContent {
+        height: 100%;
+    }
+    ServicesPanel, DockerPanel, ProcessesPanel {
         height: 100%;
     }
     """
@@ -181,7 +265,13 @@ class ServerMonitorApp(App):
             yield DiskPanel()
             yield NetworkPanel()
         with Vertical(id="bottom-row"):
-            yield ServicesPanel()
+            with TabbedContent():
+                with TabPane("Procesos", id="tab-processes"):
+                    yield ProcessesPanel()
+                with TabPane("Servicios", id="tab-services"):
+                    yield ServicesPanel()
+                with TabPane("Docker", id="tab-docker"):
+                    yield DockerPanel()
         yield Footer()
 
 

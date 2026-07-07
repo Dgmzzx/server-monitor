@@ -105,6 +105,44 @@ def _get_wifi_signal():
     return None
 
 
+def get_processes(proc_cache: dict):
+    """Devuelve lista de (pid, nombre, usuario, mem_mb, cpu%), ordenada por CPU desc.
+
+    proc_cache: dict {pid: psutil.Process} que el llamador debe mantener entre
+    llamadas, para que cpu_percent() mida el delta real desde el refresco anterior
+    (igual que hacen htop/btop), en vez de siempre devolver 0.0.
+    """
+    current_pids = set()
+    rows = []
+
+    for p in psutil.process_iter(["pid", "name", "username"]):
+        try:
+            pid = p.info["pid"]
+            current_pids.add(pid)
+
+            if pid not in proc_cache:
+                proc = psutil.Process(pid)
+                proc.cpu_percent(None)  # primera llamada "prime" el medidor
+                proc_cache[pid] = proc
+
+            proc = proc_cache[pid]
+            cpu = proc.cpu_percent(None)
+            mem_mb = proc.memory_info().rss / (1024 * 1024)
+            name = p.info["name"] or "?"
+            user = p.info["username"] or "?"
+            rows.append((pid, name, user, mem_mb, cpu))
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+
+    # limpiar procesos que ya no existen
+    for pid in list(proc_cache.keys()):
+        if pid not in current_pids:
+            del proc_cache[pid]
+
+    rows.sort(key=lambda r: r[4], reverse=True)
+    return rows
+
+
 def get_services():
     """Devuelve servicios systemd activos/fallidos y contenedores Docker."""
     services = _get_systemd_services()
@@ -130,6 +168,30 @@ def _get_systemd_services():
         if active in ("active", "failed"):
             services.append({"name": name, "active": active, "sub": sub})
     return services
+
+
+def get_docker_stats():
+    """Devuelve CPU% y uso de memoria por contenedor (como lazydocker)."""
+    try:
+        out = subprocess.run(
+            ["docker", "stats", "--no-stream", "--format",
+             "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+    except Exception:
+        return []
+
+    stats = []
+    for line in out.splitlines():
+        parts = line.split("|")
+        if len(parts) == 4:
+            stats.append({
+                "name": parts[0],
+                "cpu_percent": parts[1],
+                "mem_usage": parts[2],
+                "mem_percent": parts[3],
+            })
+    return stats
 
 
 def _get_docker_containers():
