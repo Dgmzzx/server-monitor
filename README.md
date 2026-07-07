@@ -3,10 +3,12 @@
 Monitor de recursos para servidor, en terminal. Muestra CPU (uso, por núcleo y
 temperatura), RAM, red/wifi, y servicios corriendo (systemd + Docker).
 
+![Vista del monitor](/assets/monitor-img.png)
+
 ## Instalación
 
 ```bash
-git clone https://github.com/TU_USUARIO/server-monitor.git
+git clone https://github.com/Dgmzzx/server-monitor.git
 cd server-monitor
 pip install -r requirements.txt
 ```
