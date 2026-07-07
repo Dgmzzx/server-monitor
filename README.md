@@ -6,7 +6,7 @@ temperatura), RAM, red/wifi, y servicios corriendo (systemd + Docker).
 ## Instalación
 
 ```bash
-git clone https://github.com/TU_USUARIO/server-monitor.git
+git clone https://github.com/Dgmzzx/server-monitor.git
 cd server-monitor
 pip install -r requirements.txt
 ```
